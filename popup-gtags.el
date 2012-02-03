@@ -33,7 +33,7 @@
 
 ;; (require 'tb:popup-gtags)
 ;; (define-key gtags-mode-map "\M-." 'tb:gtags-find-tag)
-;; (define-key gtags-mode-map "\M-," 'gtags-pop-stack)
+;; (define-key gtags-mode-map "\M-," 'tb:gtags-pop-stack)
 ;; (define-key gtags-mode-map "\M-r" 'tb:gtags-find-rtag)
 
 ;;; Customizable Options:
@@ -45,6 +45,9 @@
 ;;    default = t
 
 ;;; ChangeLog:
+;; * 0.0.2:
+;;   Added the function `tb:gtags-pop-stack'
+
 ;; * 0.0.1:
 ;;   Initial version.
 
@@ -75,6 +78,13 @@
 
 (defconst tb:gtags-path-property 'tb:gtags-path)
 
+(defvar tb:gtags-buffer-stack nil
+  "Stack for buffer.")
+(defvar tb:gtags-point-stack nil
+  "Stack for point.")
+(defvar tb:gtags-elscreen-stack nil
+  "Stack for elscreen tab.")
+
 ;;; Functions:
 
 (defun tb:gtags-parse-output ()
@@ -94,6 +104,33 @@
       (setq disp (propertize disp tb:gtags-path-property path))
       (push disp candidates))
     candidates))
+
+(defun tb:gtags-find-file (path)
+  (if tb:gtags-use-elscreen
+      (if gtags-read-only 
+          (elscreen-find-file-read-only path)
+        (elscreen-find-file path))
+    (if gtags-read-only 
+        (find-file-read-only path)
+      (find-file path))))
+
+(defun tb:gtags-push-context ()
+  (setq tb:gtags-buffer-stack (cons (current-buffer) tb:gtags-buffer-stack))
+  (setq tb:gtags-point-stack (cons (point) tb:gtags-point-stack))
+  (when tb:gtags-use-elscreen
+    (setq tb:gtags-elscreen-stack (cons (elscreen-get-current-screen) tb:gtags-elscreen-stack))))
+
+(defun tb:gtags-pop-context ()
+  (if (not tb:gtags-buffer-stack) nil
+    (let (buffer point)
+      (setq buffer (car tb:gtags-buffer-stack))
+      (setq tb:gtags-buffer-stack (cdr tb:gtags-buffer-stack))
+      (setq point (car tb:gtags-point-stack))
+      (setq tb:gtags-point-stack (cdr tb:gtags-point-stack))
+
+      (setq gtags-current-elscreen-no (car tb:gtags-elscreen-stack))
+      (setq tb:gtags-elscreen-stack (cdr tb:gtags-elscreen-stack))
+      (list buffer point gtags-current-elscreen-no))))
 
 (defun tb:gtags-popup-tag (flag)
   (lexical-let ((tagname (thing-at-point 'symbol)))
@@ -118,15 +155,9 @@
                   
                   ;; (message "line:%s path:%s" linum path)
                   ;; (message "%s" (current-buffer))
-
-                  (gtags-push-context)
-                  (if tb:gtags-use-elscreen
-                      (if gtags-read-only 
-                          (elscreen-find-file-read-only path)
-                        (elscreen-find-file path))
-                    (if gtags-read-only 
-                        (find-file-read-only path)
-                      (find-file path)))
+                  
+                  (tb:gtags-push-context)
+                  (tb:gtags-find-file path)
                   (setq gtags-current-buffer (current-buffer))
                   (goto-line linum)
                   (gtags-mode 1))
@@ -134,6 +165,33 @@
         (deferred:error it
           (lambda (err)
             (message "%s: tag not found." err)))))))
+
+(defun tb:gtags-pop-stack ()
+  "Move to previous point on the stack."
+  (interactive)
+  (let (delete context buffer)
+    (if (and (not (equal gtags-current-buffer nil))
+             (not (equal gtags-current-buffer (current-buffer))))
+        (switch-to-buffer gtags-current-buffer)
+
+      ;;                                   ; By default, the buffer of the referred file is left.
+      ;;                                   ; If gtags-pop-delete is set to t, the file is deleted.
+      ;;                                   ; Gtags select mode buffer is always deleted.
+      ;; (if (and (or gtags-pop-delete (equal mode-name "Gtags-Select"))
+      ;;          (not (gtags-exist-in-stack (current-buffer))))
+      ;;     (setq delete t))
+
+      (setq context (tb:gtags-pop-context))
+      (if (not context)
+          (message "The tags stack is empty.")
+        ;; (if delete
+        ;;     (kill-buffer (current-buffer)))
+        (when tb:gtags-use-elscreen
+          (elscreen-kill)
+          (elscreen-goto (nth 2 context)))
+        (switch-to-buffer (nth 0 context))
+        (setq gtags-current-buffer (current-buffer))
+        (goto-char (nth 1 context))))))
 
 (defun tb:gtags-find-tag ()
   (interactive)
